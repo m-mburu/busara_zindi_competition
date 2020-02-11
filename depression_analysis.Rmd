@@ -1,0 +1,94 @@
+---
+title: "Depression Analysis"
+author: "Mburu Moses"
+date: "2/11/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+## 
+
+```{r}
+
+library(tidyverse)
+library(data.table)
+library(ggthemes)
+library(knitr)
+train <- setDT(read.csv("train.csv"))
+
+test <- setDT(read.csv("test.csv"))
+
+```
+
+## Combining train and test for easier processing
+
+
+```{r}
+
+train[, sample := "train"]
+
+test[, sample := "test"]
+
+depression_dat <- rbindlist(list(train,test))
+
+
+depression_dat[sample == "train", .N, by = .( depressed)] %>%
+    .[, .( depressed,perc = round(N/sum(N) * 100, 2))] %>%
+    kable()
+
+
+
+```
+
+
+##
+
+```{r}
+
+naVals <- colSums(is.na(depression_dat))/nrow(depression_dat) * 100 
+
+withNa <- naVals[naVals>0]
+
+missing_perc <- data.table(variables = names(withNa), perc = withNa) 
+
+
+```
+
+##
+
+```{r}
+ggplot(missing_perc, aes( reorder(variables, perc), perc))+
+    geom_bar(stat = "identity") +
+    theme_fivethirtyeight()+
+    coord_flip()
+```
+
+##
+
+We can see that most variables with missing information are related to medical variabes. We can start by investigating the missingnes to see
+* is the data missing at random
+* is there sytematic missingness
+We should also try to see if missing data means something else such us 0 incase of variables like med_u5_deaths	Proportion of children <5 who died (1 year)
+
+
+```{r}
+missing_vars <- names(withNa)
+
+missing_vars_df <- depression_dat[, ..missing_vars]
+
+col_types <- sapply(missing_vars_df, class)
+
+missing_vars_dfm <- melt(missing_vars_df, id.vars = "depressed")
+
+missing_vars_dfm %>% .[, .(mean_var = mean(value, na.rm = T), 
+                          median_var = median(value, na.rm = T),
+                          min_var = min(value, na.rm = T),
+                          max_var = max(value, na.rm = T),
+                          perc_miss = round(sum(is.na(value)/.N *100),2 )), by = variable] %>%
+    kable()
+```
+
+
