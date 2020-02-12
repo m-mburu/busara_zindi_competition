@@ -77,7 +77,7 @@ We should also try to see if missing data means something else such us 0 incase 
 ```{r}
 missing_vars <- names(withNa)
 
-missing_vars_df <- depression_dat[, ..missing_vars]
+#missing_vars_df <- depression_dat[, ..missing_vars]
 
 col_types <- sapply(missing_vars_df, class)
 
@@ -88,7 +88,69 @@ missing_vars_dfm %>% .[, .(mean_var = mean(value, na.rm = T),
                           min_var = min(value, na.rm = T),
                           max_var = max(value, na.rm = T),
                           perc_miss = round(sum(is.na(value)/.N *100),2 )), by = variable] %>%
+    .[order(perc_miss)] %>%
+    
     kable()
 ```
 
+##
+
+hh_total members variable is the has the same information as hh_size, so we drop this variable
+
+
+```{r, fig.width=13, fig.height=13}
+head(depression_dat[sample(100), .(hhsize, hh_totalmembers)], 10) %>%
+    kable()
+```
+
+
+
+```{r, fig.width=13, fig.height=13}
+
+depression_dat[, hh_totalmembers := NULL]
+ggplot(missing_vars_dfm[!is.na(depressed)], aes(value))+
+    geom_histogram()+
+    facet_wrap(~variable+depressed, scales = "free")
+```
+
+##
+
+We can start with variables with lower missing rates. From the histogram we can see that alcohol expenditure and tobacco expenditure are right skewed, and even majority of the values are 0, For this two variables  we can replace the missing values with median.
+
+```{r}
+nms_tob_alc <- c( "cons_alcohol", "cons_tobacco"  )
+
+depression_dat[, (nms_tob_alc) :=lapply(.SD, 
+                                        function(x) ifelse(is.na(x),
+                                                           median(x, na.rm = T), x)),
+               .SDcols = nms_tob_alc ]
+```
+
+
+##
+
+For fs_meat = whether a household ate fish/meat for the past week fs_enoughtom = whether the household has enough food for tomorrow and fs_sleep_hun = respondent slept hungry last week all this variables have 29.67% missing it's highly likely that they are missing for the same observations.
+
+```{r}
+depression_dat[is.na(fs_sleephun), .(fs_sleephun, fs_meat, fs_enoughtom)] %>%
+    head()
+```
+
+
+```{r}
+nms_food <- c("fs_sleephun", "fs_meat", "fs_enoughtom")
+
+depression_dat[is.na(fs_sleephun), .(fs_sleephun, fs_meat, fs_enoughtom)] %>%
+    head()
+```
+
+
+
+```{r}
+missing_fs <- depression_dat[is.na(fs_sleephun)]
+missing_fs1 <- depression_dat[!is.na(fs_sleephun)]
+
+table(missing_fs$fs_adwholed_often)
+table(missing_fs1$fs_adwholed_often)
+```
 
