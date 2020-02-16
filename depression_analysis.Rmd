@@ -17,9 +17,11 @@ library(tidyverse)
 library(data.table)
 library(ggthemes)
 library(knitr)
-train <- setDT(read.csv("train.csv"))
+library(broom)
+library(DT)
+train <- fread("train.csv")
 
-test <- setDT(read.csv("test.csv"))
+test <- fread("test.csv")
 
 ```
 
@@ -37,7 +39,15 @@ depression_dat <- rbindlist(list(train,test))
 
 depression_dat[sample == "train", .N, by = .( depressed)] %>%
     .[, .( depressed,perc = round(N/sum(N) * 100, 2))] %>%
-    kable()
+     .[, depressed := factor(depressed, 
+                               levels = c(0, 1), labels = c("No", "Yes"))] %>%
+     ggplot(aes(depressed, perc, fill = depressed)) +
+     geom_bar(stat = "identity") +
+     geom_text(aes(depressed, perc, label = perc,
+                   vjust = .05, hjust = .5),
+               size = 4)+
+     theme_hc()+
+     scale_fill_colorblind(name = "")
 
 
 
@@ -51,11 +61,12 @@ depression_dat[sample == "train", .N, by = .( depressed)] %>%
 naVals <- colSums(is.na(depression_dat))/nrow(depression_dat) * 100 
 
 withNa <- naVals[naVals>0]
-
-missing_perc <- data.table(variables = names(withNa), perc = withNa) 
+nms_na <- names(withNa)
+missing_perc <- data.table(variables = nms_na, perc = withNa) 
 
 
 ```
+
 
 ##
 
@@ -77,7 +88,7 @@ We should also try to see if missing data means something else such us 0 incase 
 ```{r}
 missing_vars <- names(withNa)
 
-#missing_vars_df <- depression_dat[, ..missing_vars]
+missing_vars_df <- depression_dat[, ..missing_vars]
 
 col_types <- sapply(missing_vars_df, class)
 
@@ -90,7 +101,7 @@ missing_vars_dfm %>% .[, .(mean_var = mean(value, na.rm = T),
                           perc_miss = round(sum(is.na(value)/.N *100),2 )), by = variable] %>%
     .[order(perc_miss)] %>%
     
-    kable()
+    datatable()
 ```
 
 ##
@@ -99,7 +110,8 @@ hh_total members variable is the has the same information as hh_size, so we drop
 
 
 ```{r, fig.width=13, fig.height=13}
-head(depression_dat[sample(100), .(hhsize, hh_totalmembers)], 10) %>%
+head(depression_dat[sample(.N), 
+                    .(hhsize, hh_totalmembers)], 10) %>%
     kable()
 ```
 
@@ -110,7 +122,7 @@ head(depression_dat[sample(100), .(hhsize, hh_totalmembers)], 10) %>%
 depression_dat[, hh_totalmembers := NULL]
 ggplot(missing_vars_dfm[!is.na(depressed)], aes(value))+
     geom_histogram()+
-    facet_wrap(~variable+depressed, scales = "free")
+    facet_wrap(~variable, scales = "free")
 ```
 
 ##
@@ -126,31 +138,136 @@ depression_dat[, (nms_tob_alc) :=lapply(.SD,
                .SDcols = nms_tob_alc ]
 ```
 
+##
+
+```{r}
+nms_na <- nms_na[!nms_na %in% c(nms_tob_alc,  "hh_totalmembers")]
+
+nms_na_dummy <- paste0(nms_na, "_dummy")
+
+depression_dat[, (nms_na_dummy) := lapply(.SD, 
+                                          function(x) ifelse(is.na(x), 1, 0)),
+               .SDcols = nms_na]
+
+depression_dat[sample(.N), ..nms_na_dummy] %>%
+    head() %>% datatable( options = list(scrollX = TRUE))
+```
+
 
 ##
 
 For fs_meat = whether a household ate fish/meat for the past week fs_enoughtom = whether the household has enough food for tomorrow and fs_sleep_hun = respondent slept hungry last week all this variables have 29.67% missing it's highly likely that they are missing for the same observations.
 
 ```{r}
-depression_dat[is.na(fs_sleephun), .(fs_sleephun, fs_meat, fs_enoughtom)] %>%
-    head()
+#nms_na_dummy1 <- c("depressed", nms_na_dummy)
+depressed_vec <- depression_dat[sample == "train", depressed]
+df <- depression_dat[sample == "train", ..nms_na_dummy] %>% 
+  map(~chisq.test(table(.x, depressed_vec ))) %>% 
+  tibble(names = names(.), data = .) %>% 
+  mutate(stats = map(data, tidy))
+
+dt = data.table(names =nms_na_dummy ,rbindlist(df$stats) )
+
+dt %>% datatable( options = list(scrollX = TRUE))
+
 ```
 
 
 ```{r}
-nms_food <- c("fs_sleephun", "fs_meat", "fs_enoughtom")
+depression_dat[, age:= as.numeric(age)]
 
-depression_dat[is.na(fs_sleephun), .(fs_sleephun, fs_meat, fs_enoughtom)] %>%
-    head()
+depression_dat[, (nms_na_dummy) := NULL]
+depression_dat1 <- depression_dat
+chars_nms <- c( "surveyid", "village","survey_date", "sample")
+cor(depression_dat[,.SD, .SDcols = !chars_nms], use = "complete.obs", 
+    method = "kendall") %>% datatable( options = list(scrollX = TRUE))
 ```
 
 
 
 ```{r}
-missing_fs <- depression_dat[is.na(fs_sleephun)]
-missing_fs1 <- depression_dat[!is.na(fs_sleephun)]
-
-table(missing_fs$fs_adwholed_often)
-table(missing_fs1$fs_adwholed_often)
+library(mice)
+imputed_depressed <- mice(depression_dat[, .SD, 
+                                         .SDcols = !"depressed"], m=5, maxit = 50,
+                          method = 'rf', seed = 500, verbose = FALSE)
 ```
+
+
+
+```{r}
+depressed_impute <- data.table(depressed = depression_dat$depressed, complete(imputed_depressed,3))
+train <- depressed_impute[sample == "train"]
+test <- depressed_impute[sample == "test"]
+```
+
+
+
+```{r}
+
+nms <- c("surveyid", "village", "survey_date" )
+train[, (nms):= NULL]
+trainx <- data.matrix(train[,.SD, .SDcols = !"depressed"]) 
+y <-  train$depressed
+nms2 <- c(nms, "depressed")
+test[, (nms2) := NULL]
+```
+
+```{r}
+
+nms <- c("surveyid", "village", "survey_date" )
+train[, (nms):= NULL]
+set.seed(200)
+train_sample <- sample(nrow(train), as.integer(.8*nrow(train)))
+trainx <- data.matrix(train[,.SD, .SDcols = !"depressed"]) 
+trainx <- trainx[train_sample,]
+validx <- trainx[-train_sample,]
+y_train <-  train$depressed[train_sample]
+y_valid <-  train$depressed[-train_sample]
+nms2 <- c(nms, "depressed")
+test[, (nms2) := NULL]
+```
+
+
+```{r}
+library(xgboost)
+xgtrain <- xgb.DMatrix(trainx, label = y_train)
+params <- list(
+        booster = "gbtree",
+        objective = "binary:logistic",
+        eta= seq(.1, .9, by = .2),
+        gamma= 0:5,
+        max_depth=1:10,
+        min_child_weight=10,
+        subsample=.9,
+        colsample_bytree=.8
+)
+cv <- xgb.cv(params = params
+                ,data = xgtrain
+                ,nrounds = 10
+                ,nfold = 5
+                ,metrics = "aucpr"
+                ,showsd = T
+                ,stratified = T
+                ,early_stop_round = 10
+                ,maximize = F
+)
+
+cv$evaluation_log %>% datatable() 
+cv$params
+```
+
+
+
+
+```{r}
+bst2 <- xgboost(data = trainx, label = y, 
+                max_depth = 2, eta = .1, nthread = 4, nrounds = 7, 
+                objective = "binary:logistic", verbose = FALSE, gamma = )
+
+
+predxgbooost <- ifelse(predict(cv, testx)> 0.5, 1, 0)
+
+mean(ytest == predxgbooost)
+```
+
 
